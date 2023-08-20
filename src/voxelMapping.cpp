@@ -703,12 +703,13 @@ int main(int argc, char **argv) {
       flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME
                            ? false
                            : true;
+      // 初始化地图
       if (flg_EKF_inited && !init_map) {
-        pcl::PointCloud<pcl::PointXYZI>::Ptr world_lidar(
-            new pcl::PointCloud<pcl::PointXYZI>);
+        pcl::PointCloud<pcl::PointXYZI>::Ptr world_lidar(new pcl::PointCloud<pcl::PointXYZI>);
         Eigen::Quaterniond q(state.rot_end);
         transformLidar(state, p_imu, feats_undistort, world_lidar);
-        std::vector<pointWithCov> pv_list;
+        std::vector<pointWithCov> pv_list; // all points with covariance
+        //compute cov for all points
         for (size_t i = 0; i < world_lidar->size(); i++) {
           pointWithCov pv;
           pv.point << world_lidar->points[i].x, world_lidar->points[i].y,
@@ -721,11 +722,12 @@ int main(int argc, char **argv) {
             point_this[2] = 0.001;
           }
           M3D cov;
-          calcBodyCov(point_this, ranging_cov, angle_cov, cov);
+          calcBodyCov(point_this, ranging_cov, angle_cov, cov); //init point cov
 
           point_this += Lidar_offset_to_IMU;
           M3D point_crossmat;
           point_crossmat << SKEW_SYM_MATRX(point_this);
+          // R * cov_p * R^T + p^ * cov_R * (p^)^T + cov_t , (3) in the paper
           cov = state.rot_end * cov * state.rot_end.transpose() +
                 (-point_crossmat) * state.cov.block<3, 3>(0, 0) *
                     (-point_crossmat).transpose() +

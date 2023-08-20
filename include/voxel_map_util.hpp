@@ -538,13 +538,13 @@ void buildVoxelMap(const std::vector<pointWithCov> &input_points,
     for (int j = 0; j < 3; j++) {
       loc_xyz[j] = p_v.point[j] / voxel_size;
       if (loc_xyz[j] < 0) {
-        loc_xyz[j] -= 1.0;
+        loc_xyz[j] -= 1.0; // <0 -1???
       }
     }
-    VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1],
-                       (int64_t)loc_xyz[2]);
+    VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
     auto iter = feat_map.find(position);
     if (iter != feat_map.end()) {
+        //already have the voexl
       feat_map[position]->temp_points_.push_back(p_v);
       feat_map[position]->new_points_num_++;
     } else {
@@ -562,7 +562,7 @@ void buildVoxelMap(const std::vector<pointWithCov> &input_points,
     }
   }
   for (auto iter = feat_map.begin(); iter != feat_map.end(); ++iter) {
-    iter->second->init_octo_tree();
+    iter->second->init_octo_tree(); //OctoTree *
   }
 }
 
@@ -1224,22 +1224,23 @@ void calcBodyCov(Eigen::Vector3d &pb, const float range_inc,
   float range = sqrt(pb[0] * pb[0] + pb[1] * pb[1] + pb[2] * pb[2]);
   float range_var = range_inc * range_inc;
   Eigen::Matrix2d direction_var;
-  direction_var << pow(sin(DEG2RAD(degree_inc)), 2), 0, 0,
-      pow(sin(DEG2RAD(degree_inc)), 2);
+  // (angle_cov^2, 0,
+  //  0, angle_cov^2)
+  direction_var << pow(sin(DEG2RAD(degree_inc)), 2), 0, 0, pow(sin(DEG2RAD(degree_inc)), 2);
   Eigen::Vector3d direction(pb);
   direction.normalize();
-  Eigen::Matrix3d direction_hat;
-  direction_hat << 0, -direction(2), direction(1), direction(2), 0,
-      -direction(0), -direction(1), direction(0), 0;
-  Eigen::Vector3d base_vector1(1, 1,
-                               -(direction(0) + direction(1)) / direction(2));
+  Eigen::Matrix3d direction_hat; // w^
+  direction_hat << 0, -direction(2), direction(1), direction(2), 0, -direction(0), -direction(1), direction(0), 0;
+  //direction dot base_vector1 = 0
+  Eigen::Vector3d base_vector1(1, 1, -(direction(0) + direction(1)) / direction(2)); //(1, 1, -(x+y)/z), not unique
   base_vector1.normalize();
   Eigen::Vector3d base_vector2 = base_vector1.cross(direction);
   base_vector2.normalize();
-  Eigen::Matrix<double, 3, 2> N;
+  Eigen::Matrix<double, 3, 2> N; //N = [base_vector1, base_vector2]
   N << base_vector1(0), base_vector2(0), base_vector1(1), base_vector2(1),
       base_vector1(2), base_vector2(2);
-  Eigen::Matrix<double, 3, 2> A = range * direction_hat * N;
+  Eigen::Matrix<double, 3, 2> A = range * direction_hat * N; // (d * w^ * N )in the paper
+  //cov = w * var_d * w^T + A * var_w * A^T
   cov = direction * range_var * direction.transpose() +
         A * direction_var * A.transpose();
 };
