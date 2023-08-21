@@ -40,15 +40,15 @@ typedef struct pointWithCov {
 typedef struct Plane {
   Eigen::Vector3d center;
   Eigen::Vector3d normal;
-  Eigen::Vector3d y_normal;
-  Eigen::Vector3d x_normal;
+  Eigen::Vector3d y_normal; //eigen vector corresponding to mid eigen value
+  Eigen::Vector3d x_normal; //eigen vector corresponding to max eigen value
   Eigen::Matrix3d covariance;
   Eigen::Matrix<double, 6, 6> plane_cov;
-  float radius = 0;
+  float radius = 0;      //sqrt (max_eigen_value
   float min_eigen_value = 1;
   float mid_eigen_value = 1;
   float max_eigen_value = 1;
-  float d = 0;
+  float d = 0; // n * p + d = 0
   int points_size = 0;
 
   bool is_plane = false;
@@ -141,8 +141,8 @@ public:
       plane->center += pv.point;
     }
     plane->center = plane->center / plane->points_size;
-    plane->covariance = plane->covariance / plane->points_size -
-                        plane->center * plane->center.transpose();
+    //plane covariance
+    plane->covariance = plane->covariance / plane->points_size - plane->center * plane->center.transpose();
     Eigen::EigenSolver<Eigen::Matrix3d> es(plane->covariance);
     Eigen::Matrix3cd evecs = es.eigenvectors();
     Eigen::Vector3cd evals = es.eigenvalues();
@@ -156,9 +156,14 @@ public:
     Eigen::Vector3d evecMid = evecs.real().col(evalsMid);
     Eigen::Vector3d evecMax = evecs.real().col(evalsMax);
     // plane covariance calculation
-    Eigen::Matrix3d J_Q;
+    /*    1/n  0   0
+     *     0  1/n  0
+     *     0   0  1/n
+     */
+    Eigen::Matrix3d J_Q; //dq/dp
     J_Q << 1.0 / plane->points_size, 0, 0, 0, 1.0 / plane->points_size, 0, 0, 0,
         1.0 / plane->points_size;
+    // min eigen value small enough
     if (evalsReal(evalsMin) < planer_threshold_) {
       std::vector<int> index(points.size());
       std::vector<Eigen::Matrix<double, 6, 6>> temp_matrix(points.size());
@@ -168,9 +173,9 @@ public:
         for (int m = 0; m < 3; m++) {
           if (m != (int)evalsMin) {
             Eigen::Matrix<double, 1, 3> F_m =
-                (points[i].point - plane->center).transpose() /
-                ((plane->points_size) * (evalsReal[evalsMin] - evalsReal[m])) *
-                (evecs.real().col(m) * evecs.real().col(evalsMin).transpose() +
+                (points[i].point - plane->center).transpose() /                      // (p - mean_p)^T /
+                ((plane->points_size) * (evalsReal[evalsMin] - evalsReal[m])) *      // n * (lanbda_3 - lambda_m) *
+                (evecs.real().col(m) * evecs.real().col(evalsMin).transpose() +      // (u_m * n^T + n^T * u_m^T)
                  evecs.real().col(evalsMin) * evecs.real().col(m).transpose());
             F.row(m) = F_m;
           } else {
@@ -212,7 +217,7 @@ public:
         plane->is_init = true;
       }
 
-    } else {
+    } else { //min eigen value is not small enough, not yet a plane
       if (!plane->is_init) {
         plane->id = plane_id;
         plane_id++;
@@ -334,7 +339,7 @@ public:
       return;
     }
     for (size_t i = 0; i < temp_points_.size(); i++) {
-      int xyz[3] = {0, 0, 0};
+      int xyz[3] = {0, 0, 0}; //divide into sub voxel
       if (temp_points_[i].point[0] > voxel_center_[0]) {
         xyz[0] = 1;
       }
@@ -344,11 +349,13 @@ public:
       if (temp_points_[i].point[2] > voxel_center_[2]) {
         xyz[2] = 1;
       }
-      int leafnum = 4 * xyz[0] + 2 * xyz[1] + xyz[2];
+      int leafnum = 4 * xyz[0] + 2 * xyz[1] + xyz[2]; // sub voxel index
       if (leaves_[leafnum] == nullptr) {
+          // build new sub voxel
         leaves_[leafnum] = new OctoTree(
             max_layer_, layer_ + 1, layer_point_size_, max_points_size_,
             max_cov_points_size_, planer_threshold_);
+        //set sub voxel center
         leaves_[leafnum]->voxel_center_[0] =
             voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
         leaves_[leafnum]->voxel_center_[1] =
@@ -369,7 +376,7 @@ public:
             leaves_[i]->octo_state_ = 0;
           } else {
             leaves_[i]->octo_state_ = 1;
-            leaves_[i]->cut_octo_tree();
+            leaves_[i]->cut_octo_tree(); // divide into sub voxel again.
           }
           leaves_[i]->init_octo_ = true;
           leaves_[i]->new_points_num_ = 0;
@@ -562,6 +569,7 @@ void buildVoxelMap(const std::vector<pointWithCov> &input_points,
     }
   }
   for (auto iter = feat_map.begin(); iter != feat_map.end(); ++iter) {
+      // init voxel and divide into sub voxel
     iter->second->init_octo_tree(); //OctoTree *
   }
 }
@@ -638,16 +646,18 @@ void build_single_residual(const pointWithCov &pv, const OctoTree *current_octo,
         (plane.center(0) - p_w(0)) * (plane.center(0) - p_w(0)) +
         (plane.center(1) - p_w(1)) * (plane.center(1) - p_w(1)) +
         (plane.center(2) - p_w(2)) * (plane.center(2) - p_w(2));
-    float range_dis = sqrt(dis_to_center - dis_to_plane * dis_to_plane);
+    float range_dis = sqrt(dis_to_center - dis_to_plane * dis_to_plane); //投影点到平面中心的距离
 
-    if (range_dis <= radius_k * plane.radius) {
+    //todo
+    if (range_dis <= radius_k * plane.radius) { //投影点到平面中心的距离 < k * 平面半径
       Eigen::Matrix<double, 1, 6> J_nq;
       J_nq.block<1, 3>(0, 0) = p_w - plane.center;
       J_nq.block<1, 3>(0, 3) = -plane.normal;
       double sigma_l = J_nq * plane.plane_cov * J_nq.transpose();
       sigma_l += plane.normal.transpose() * pv.cov * plane.normal;
-      if (dis_to_plane < sigma_num * sqrt(sigma_l)) {
+      if (dis_to_plane < sigma_num * sqrt(sigma_l)) { //点到平面距离小于预设中误差
         is_sucess = true;
+        //概率
         double this_prob = 1.0 / (sqrt(sigma_l)) *
                            exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
         if (this_prob > prob) {
@@ -669,6 +679,7 @@ void build_single_residual(const pointWithCov &pv, const OctoTree *current_octo,
       return;
     }
   } else {
+      //build single residual in sub voxel
     if (current_layer < max_layer) {
       for (size_t leafnum = 0; leafnum < 8; leafnum++) {
         if (current_octo->leaves_[leafnum] != nullptr) {
@@ -814,7 +825,7 @@ void BuildResidualListOMP(const unordered_map<VOXEL_LOC, OctoTree *> &voxel_map,
 #endif
   for (int i = 0; i < index.size(); i++) {
     pointWithCov pv = pv_list[i];
-    float loc_xyz[3];
+    float loc_xyz[3]; //voxel index
     for (int j = 0; j < 3; j++) {
       loc_xyz[j] = pv.point_world[j] / voxel_size;
       if (loc_xyz[j] < 0) {
@@ -831,8 +842,10 @@ void BuildResidualListOMP(const unordered_map<VOXEL_LOC, OctoTree *> &voxel_map,
       double prob = 0;
       build_single_residual(pv, current_octo, 0, max_layer, sigma_num,
                             is_sucess, prob, single_ptpl);
+      //如果未能建立关联
       if (!is_sucess) {
         VOXEL_LOC near_position = position;
+        // 计算邻近voxel的位置
         if (loc_xyz[0] >
             (current_octo->voxel_center_[0] + current_octo->quater_length_)) {
           near_position.x = near_position.x + 1;
@@ -854,6 +867,8 @@ void BuildResidualListOMP(const unordered_map<VOXEL_LOC, OctoTree *> &voxel_map,
                                  current_octo->quater_length_)) {
           near_position.z = near_position.z - 1;
         }
+
+        //与最邻近voxel计算残差
         auto iter_near = voxel_map.find(near_position);
         if (iter_near != voxel_map.end()) {
           build_single_residual(pv, iter_near->second, 0, max_layer, sigma_num,

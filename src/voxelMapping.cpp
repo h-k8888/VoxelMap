@@ -112,7 +112,7 @@ PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
 PointCloudXYZI::Ptr map_down_body(new PointCloudXYZI());
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
-PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
+PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1)); //scan points
 PointCloudXYZI::Ptr laserCloudNoeffect(new PointCloudXYZI(100000, 1));
 pcl::VoxelGrid<PointType> downSizeFilterSurf;
 pcl::VoxelGrid<PointType> downSizeFilterMap;
@@ -594,7 +594,7 @@ int main(int argc, char **argv) {
   V3D rot_add, t_add;
   StatesGroup state_propagat;
   PointType pointOri, pointSel, coeff;
-  PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
+  PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1)); // xyz: normal + intensity: residual
   int frame_num = 0;
   double deltaT, deltaR, aver_time_consu = 0;
   bool flg_EKF_inited, flg_EKF_converged, EKF_stop_flg = 0,
@@ -740,6 +740,7 @@ int main(int argc, char **argv) {
           sigma_pv[2] = sqrt(sigma_pv[2]);
         }
 
+        //adaptive voxel
         buildVoxelMap(pv_list, max_voxel_size, max_layer, layer_size,
                       max_points_size, max_points_size, min_eigen_value,
                       voxel_map);
@@ -756,6 +757,8 @@ int main(int argc, char **argv) {
         continue;
       }
 
+      ///已有地图
+
       /*** downsample the feature points in a scan ***/
       auto t_downsample_start = std::chrono::high_resolution_clock::now();
       downSizeFilterSurf.setInputCloud(feats_undistort);
@@ -769,6 +772,7 @@ int main(int argc, char **argv) {
               .count() *
           1000;
 
+      // use curvature as time of each laser points
       sort(feats_down_body->points.begin(), feats_down_body->points.end(),
            time_list);
 
@@ -778,8 +782,8 @@ int main(int argc, char **argv) {
 
       scan_match_time = 0.0;
 
-      std::vector<M3D> body_var;
-      std::vector<M3D> crossmat_list;
+      std::vector<M3D> body_var; //cov_p
+      std::vector<M3D> crossmat_list; //p^
 
       /*** iterated state estimation ***/
       auto calc_point_cov_start = std::chrono::high_resolution_clock::now();
@@ -791,6 +795,7 @@ int main(int argc, char **argv) {
           point_this[2] = 0.001;
         }
         M3D cov;
+        //重新计算降采样后点的不确定度
         calcBodyCov(point_this, ranging_cov, angle_cov, cov);
         M3D point_crossmat;
         point_crossmat << SKEW_SYM_MATRX(point_this);
@@ -813,14 +818,15 @@ int main(int argc, char **argv) {
         total_residual = 0.0;
 
         std::vector<double> r_list;
-        std::vector<ptpl> ptpl_list;
-        /** LiDAR match based on 3 sigma criterion **/
+        std::vector<ptpl> ptpl_list;///  point to plane matching structure
 
-        vector<pointWithCov> pv_list;
-        std::vector<M3D> var_list;
+          /** LiDAR match based on 3 sigma criterion **/
+
+        vector<pointWithCov> pv_list;// points in the world frame
+        std::vector<M3D> var_list; // point cov in the world frame
         pcl::PointCloud<pcl::PointXYZI>::Ptr world_lidar(
             new pcl::PointCloud<pcl::PointXYZI>);
-        transformLidar(state, p_imu, feats_down_body, world_lidar);
+        transformLidar(state, p_imu, feats_down_body, world_lidar); //world_lidar: points in the world frame
         for (size_t i = 0; i < feats_down_body->size(); i++) {
           pointWithCov pv;
           pv.point << feats_down_body->points[i].x,
@@ -831,15 +837,17 @@ int main(int argc, char **argv) {
           M3D point_crossmat = crossmat_list[i];
           M3D rot_var = state.cov.block<3, 3>(0, 0);
           M3D t_var = state.cov.block<3, 3>(3, 3);
-          cov = state.rot_end * cov * state.rot_end.transpose() +
+            // R * cov_p * R^T + p^ * cov_R * (p^)^T + cov_t , (3) in the paper
+            cov = state.rot_end * cov * state.rot_end.transpose() +
                 (-point_crossmat) * rot_var * (-point_crossmat.transpose()) +
                 t_var;
-          pv.cov = cov;
+          pv.cov = cov; //cov in the world frame
           pv_list.push_back(pv);
-          var_list.push_back(cov);
+          var_list.push_back(cov);// point cov in the world frame
         }
         auto scan_match_time_start = std::chrono::high_resolution_clock::now();
         std::vector<V3D> non_match_list;
+        ///多尺度voxel，概率下计算点到平面残差
         BuildResidualListOMP(voxel_map, max_voxel_size, 3.0, max_layer, pv_list,
                              ptpl_list, non_match_list);
 
@@ -858,6 +866,7 @@ int main(int argc, char **argv) {
           pl.y = ptpl_list[i].normal(1);
           pl.z = ptpl_list[i].normal(2);
           effct_feat_num++;
+          //点到面残差
           float dis = (pi_world.x * pl.x + pi_world.y * pl.y +
                        pi_world.z * pl.z + ptpl_list[i].d);
           pl.intensity = dis;
@@ -893,26 +902,26 @@ int main(int argc, char **argv) {
         for (int i = 0; i < effct_feat_num; i++) {
           const PointType &laser_p = laserCloudOri->points[i];
           V3D point_this(laser_p.x, laser_p.y, laser_p.z);
-          M3D cov;
+          M3D cov; // point cov
           if (calib_laser) {
             calcBodyCov(point_this, ranging_cov, CALIB_ANGLE_COV, cov);
           } else {
             calcBodyCov(point_this, ranging_cov, angle_cov, cov);
           }
 
-          cov = state.rot_end * cov * state.rot_end.transpose();
+          cov = state.rot_end * cov * state.rot_end.transpose(); // R * point_cov * R^T
           M3D point_crossmat;
           point_crossmat << SKEW_SYM_MATRX(point_this);
           const PointType &norm_p = corr_normvect->points[i];
-          V3D norm_vec(norm_p.x, norm_p.y, norm_p.z);
+          V3D norm_vec(norm_p.x, norm_p.y, norm_p.z); //associated plane normal
           V3D point_world = state.rot_end * point_this + state.pos_end;
           // /*** get the normal vector of closest surface/corner ***/
           Eigen::Matrix<double, 1, 6> J_nq;
           J_nq.block<1, 3>(0, 0) = point_world - ptpl_list[i].center;
           J_nq.block<1, 3>(0, 3) = -ptpl_list[i].normal;
-          double sigma_l = J_nq * ptpl_list[i].plane_cov * J_nq.transpose();
-          R_inv(i) = 1.0 / (sigma_l + norm_vec.transpose() * cov * norm_vec);
-          double ranging_dis = point_this.norm();
+          double sigma_l = J_nq * ptpl_list[i].plane_cov * J_nq.transpose(); // project  plane cov to residual cov
+          R_inv(i) = 1.0 / (sigma_l + norm_vec.transpose() * cov * norm_vec);// residual cov = plane cov + point cov
+          double ranging_dis = point_this.norm(); //range
           laserCloudOri->points[i].intensity = sqrt(R_inv(i));
           laserCloudOri->points[i].normal_x =
               corr_normvect->points[i].intensity;
