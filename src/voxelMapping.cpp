@@ -895,8 +895,8 @@ int main(int argc, char **argv) {
         /*** Computation of Measuremnt Jacobian matrix H and measurents vector
          * ***/
         MatrixXd Hsub(effct_feat_num, 6);
-        MatrixXd Hsub_T_R_inv(6, effct_feat_num);
-        VectorXd R_inv(effct_feat_num);
+        MatrixXd Hsub_T_R_inv(6, effct_feat_num); // H^T * R^-1
+        VectorXd R_inv(effct_feat_num); // n * 1
         VectorXd meas_vec(effct_feat_num);
 
         for (int i = 0; i < effct_feat_num; i++) {
@@ -920,7 +920,7 @@ int main(int argc, char **argv) {
           J_nq.block<1, 3>(0, 0) = point_world - ptpl_list[i].center;
           J_nq.block<1, 3>(0, 3) = -ptpl_list[i].normal;
           double sigma_l = J_nq * ptpl_list[i].plane_cov * J_nq.transpose(); // project  plane cov to residual cov
-          R_inv(i) = 1.0 / (sigma_l + norm_vec.transpose() * cov * norm_vec);// residual cov = plane cov + point cov
+          R_inv(i) = 1.0 / (sigma_l + norm_vec.transpose() * cov * norm_vec);//!!! residual cov = plane cov + point cov, double
           double ranging_dis = point_this.norm(); //range
           laserCloudOri->points[i].intensity = sqrt(R_inv(i));
           laserCloudOri->points[i].normal_x =
@@ -932,7 +932,7 @@ int main(int argc, char **argv) {
               sqrt(sigma_l + norm_vec.transpose() * cov * norm_vec);
 
           /*** calculate the Measuremnt Jacobian matrix H ***/
-          V3D A(point_crossmat * state.rot_end.transpose() * norm_vec);
+          V3D A(point_crossmat * state.rot_end.transpose() * norm_vec); // A = p^ * R(lidar <-- world) * normal_w, dH/dr
           Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z;
           Hsub_T_R_inv.col(i) << A[0] * R_inv(i), A[1] * R_inv(i),
               A[2] * R_inv(i), norm_p.x * R_inv(i), norm_p.y * R_inv(i),
@@ -954,10 +954,10 @@ int main(int argc, char **argv) {
           H_init.block<3, 3>(0, 0) = M3D::Identity();
           H_init.block<3, 3>(3, 3) = M3D::Identity();
           H_init.block<3, 3>(6, 15) = M3D::Identity();
-          z_init.block<3, 1>(0, 0) = -Log(state.rot_end);
-          z_init.block<3, 1>(0, 0) = -state.pos_end;
+          z_init.block<3, 1>(0, 0) = -Log(state.rot_end);//??
+          z_init.block<3, 1>(0, 0) = -state.pos_end;//??
 
-          auto H_init_T = H_init.transpose();
+          auto H_init_T = H_init.transpose(); //H^T
           auto &&K_init =
               state.cov * H_init_T *
               (H_init * state.cov * H_init_T + 0.0001 * MD(9, 9)::Identity())
@@ -967,12 +967,14 @@ int main(int argc, char **argv) {
           state.resetpose();
           EKF_stop_flg = true;
         } else {
-          auto &&Hsub_T = Hsub.transpose();
-          H_T_H.block<6, 6>(0, 0) = Hsub_T_R_inv * Hsub;
+          auto &&Hsub_T = Hsub.transpose(); // H^T
+          H_T_H.block<6, 6>(0, 0) = Hsub_T_R_inv * Hsub; // H^T * R^-1 * H
           MD(DIM_STATE, DIM_STATE) &&K_1 =
-              (H_T_H + (state.cov).inverse()).inverse();
-          K = K_1.block<DIM_STATE, 6>(0, 0) * Hsub_T_R_inv;
-          auto vec = state_propagat - state;
+              (H_T_H + (state.cov).inverse()).inverse(); // (H^T * R^-1 * H + P^-1)^-1
+          K = K_1.block<DIM_STATE, 6>(0, 0) * Hsub_T_R_inv; // K = (H^T * R^-1 * H + P^-1)^-1 * H^T * R^-1
+          auto vec = state_propagat - state; //-dx, - error
+          // meas_vec: - residual
+          // delta error-state = - K * z + (-dx_n) - K * H * (-dx_n) = - K * z - (I - KH) * dx_n, equation (18) in  FAST-LIO
           solution = K * meas_vec + vec - K * Hsub * vec.block<6, 1>(0, 0);
 
           int minRow, minCol;
@@ -985,7 +987,7 @@ int main(int argc, char **argv) {
             solution.block<6, 1>(9, 0).setZero();
           }
 
-          state += solution;
+          state += solution; // state + delta error state
 
           rot_add = solution.block<3, 1>(0, 0);
           t_add = solution.block<3, 1>(3, 0);
@@ -1012,8 +1014,8 @@ int main(int argc, char **argv) {
           if (flg_EKF_inited) {
             /*** Covariance Update ***/
             G.setZero();
-            G.block<DIM_STATE, 6>(0, 0) = K * Hsub;
-            state.cov = (I_STATE - G) * state.cov;
+            G.block<DIM_STATE, 6>(0, 0) = K * Hsub; // K * H
+            state.cov = (I_STATE - G) * state.cov; // (P = (I - K * H) * P
             total_distance += (state.pos_end - position_last).norm();
             position_last = state.pos_end;
 
