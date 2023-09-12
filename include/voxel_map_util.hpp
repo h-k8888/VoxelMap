@@ -545,7 +545,7 @@ void buildVoxelMap(const std::vector<pointWithCov> &input_points,
     for (int j = 0; j < 3; j++) {
       loc_xyz[j] = p_v.point[j] / voxel_size;
       if (loc_xyz[j] < 0) {
-        loc_xyz[j] -= 1.0; // <0 -1???
+        loc_xyz[j] -= 1.0;
       }
     }
     VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
@@ -1234,6 +1234,7 @@ void pubPlaneMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &feat_map,
   //      << "total size: " << feat_map.size() << endl;
 }
 
+//todo
 void calcBodyCov(Eigen::Vector3d &pb, const float range_inc,
                  const float degree_inc, Eigen::Matrix3d &cov) {
   float range = sqrt(pb[0] * pb[0] + pb[1] * pb[1] + pb[2] * pb[2]);

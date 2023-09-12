@@ -722,11 +722,13 @@ int main(int argc, char **argv) {
             point_this[2] = 0.001;
           }
           M3D cov;
+          // todo
           calcBodyCov(point_this, ranging_cov, angle_cov, cov); //init point cov
 
           point_this += Lidar_offset_to_IMU;
           M3D point_crossmat;
           point_crossmat << SKEW_SYM_MATRX(point_this);
+          // todo
           // R * cov_p * R^T + p^ * cov_R * (p^)^T + cov_t , (3) in the paper
           cov = state.rot_end * cov * state.rot_end.transpose() +
                 (-point_crossmat) * state.cov.block<3, 3>(0, 0) *
@@ -795,6 +797,7 @@ int main(int argc, char **argv) {
           point_this[2] = 0.001;
         }
         M3D cov;
+        // todo
         //重新计算降采样后点的不确定度
         calcBodyCov(point_this, ranging_cov, angle_cov, cov);
         M3D point_crossmat;
